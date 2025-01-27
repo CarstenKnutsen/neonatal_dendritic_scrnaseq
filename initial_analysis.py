@@ -18,6 +18,7 @@ from gtfparse import read_gtf
 import anndata
 from collections import defaultdict
 
+#we set hardcoded paths here
 gtf_fn = "data/genes.gtf"
 input_data = "data/single_cell_files/cellranger_output"
 output_data = "data/single_cell_files/scanpy_files"
@@ -27,6 +28,7 @@ figures = "data/figures"
 os.makedirs(figures, exist_ok=True)
 sc.set_figure_params(dpi=300, format="png")
 sc.settings.figdir = figures
+#usefula gene lists below
 gene_dict = {
     "immune": [
         "Cd68",
@@ -56,6 +58,7 @@ gene_dict = {
         "Il3ra",
     ],
 }
+#leiden dictionary to assign cell types
 leiden_ct_dict = {
     "0": "DC",
     "1": "DC",
@@ -66,7 +69,7 @@ leiden_ct_dict = {
     "6": "DC",
     "7": "DC",
     "8": "DC",
-    "9": "DC",
+    "9": "doublet DC",
     "10": "DC",
     "11": "T cell",
     "12": "Alveolar macrophage",
@@ -75,8 +78,12 @@ leiden_ct_dict = {
     "15": "DC/T doublet",
     "16": "Neutrophil",
     "17": "Endothelial",
+    "18": "Unk1",
+    "19": "Unk2",
+
 }
 if __name__ == "__main__":
+    ## Here we are reading in cellranger outputs and concatentating together, adding some metadata for both cells in obs and genes in var
     runs = os.listdir(input_data)
     adatas = []
     gtf = read_gtf(gtf_fn)
@@ -103,9 +110,11 @@ if __name__ == "__main__":
     adata.var["ribo"] = adata.var_names.str.startswith(("Rps", "Rpl"))
     adata.var["hb"] = adata.var_names.str.contains(("^Hb[^(p)]"))
     print(adata)
+    ## write out unfiltered object here
     adata.write(
         f"{output_data}/{adata_name}_cellranger_all_cells.gz.h5ad", compression="gzip"
     )
+    ## Run qc and make some qc graphs
     figures_qc = f"{figures}/qc"
     os.makedirs(figures_qc, exist_ok=True)
     sc.settings.figdir = figures_qc
@@ -155,7 +164,7 @@ if __name__ == "__main__":
     sc.pp.scrublet(adata, batch_key="Library")
     print(adata)
     sc.pl.scrublet_score_distribution(adata, show=False, save="scrublet_scores")
-
+    # instead of filtering with thresholds we are filtering with outlier testing for three categories, level of UMI, level of unique genes, and pct of UMIs in highly expressed genes
     def is_outlier(adata, metric: str, nmads: int):
         M = adata.obs[metric]
         outlier = (M < np.median(M) - nmads * median_abs_deviation(M)) | (
@@ -172,6 +181,7 @@ if __name__ == "__main__":
     print(adata.obs.mt_outlier.value_counts())
     print(adata.obs.outlier.value_counts())
     adata = adata[(~adata.obs.outlier) & (~adata.obs.mt_outlier)].copy()
+    #filter out genes expressed in less than 10 cells, arbitrary
     sc.pp.filter_genes(adata, min_cells=10)
     sc.pl.scatter(
         adata,
@@ -207,6 +217,7 @@ if __name__ == "__main__":
     )
     print(f"Median UMIS: {adata.obs['total_umis'].median()}")
     print(f"Median Genes: {adata.obs['n_genes_by_umis'].median()}")
+    # run embedding and clustering below
     figures_embed = f"{figures}/initial_embedding"
     os.makedirs(figures_embed, exist_ok=True)
     sc.settings.figdir = figures_embed
@@ -220,7 +231,9 @@ if __name__ == "__main__":
     # sce.pp.harmony_integrate(adata, 'Library',adjusted_basis='X_pca')
     sc.pp.neighbors(adata, use_rep="X_pca")
     sc.tl.leiden(adata, key_added="leiden", resolution=0.5)
+    sc.tl.umap(adata, min_dist=0.3)
     adata.obs["celltype_rough"] = [leiden_ct_dict[x] for x in adata.obs["leiden"]]
+    ## make plots below that are helpful for initial analysis
     sc.pl.dotplot(
         adata,
         gene_dict["immune"],
@@ -229,7 +242,6 @@ if __name__ == "__main__":
         show=False,
         save="useful_genes.png",
     )
-    sc.tl.umap(adata, min_dist=0.3)
     for color in [
         "log1p_total_umis",
         "log1p_n_genes_by_umis",
@@ -288,4 +300,3 @@ if __name__ == "__main__":
     adata.write(
         f"{output_data}/{adata_name}_filtered_embed.gz.h5ad", compression="gzip"
     )
-    adata = sc.read(f"{output_data}/{adata_name}_filtered_embed.gz.h5ad")
